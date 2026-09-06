@@ -10,6 +10,17 @@ from .colab import ColabComputeProvider
 from .config import ColabConfig, ComputeConfig, KaggleConfig, LocalConfig, load_compute_config
 from .kaggle import KaggleComputeProvider
 from .local import LocalComputeProvider
+from .protocol import (
+    PROTOCOL_VERSION,
+    WORKER_VERSION,
+    JobManifest,
+    ReplayStore,
+    ResultManifest,
+    build_job_manifest_from_training_job,
+    generate_keypair,
+    validate_job_manifest,
+    validate_result_manifest,
+)
 from .security import (
     assert_no_execution_commands,
     assert_no_secrets,
@@ -26,6 +37,7 @@ from .types import (
     WorkloadType,
 )
 from .validation import ArtifactValidationResult, validate_training_result
+from .worker import ColabWorker, worker_has_no_execution_apis
 
 __all__ = [
     "ComputeProvider",
@@ -50,4 +62,15 @@ __all__ = [
     "assert_no_execution_commands",
     "validate_training_result",
     "ArtifactValidationResult",
+    "PROTOCOL_VERSION",
+    "WORKER_VERSION",
+    "JobManifest",
+    "ResultManifest",
+    "ReplayStore",
+    "generate_keypair",
+    "build_job_manifest_from_training_job",
+    "validate_job_manifest",
+    "validate_result_manifest",
+    "ColabWorker",
+    "worker_has_no_execution_apis",
 ]
