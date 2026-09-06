@@ -3,14 +3,22 @@
 Security contract:
 - HEAVY training/research only
 - No secrets, no broker credentials, no execution commands
+- Signed job protocol + authenticated worker when available
 - Output is untrusted; promotion requires local validation
 - Disconnect / missing session => INTERRUPTED or UNKNOWN, never SUCCESS
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from .base import ComputeProvider
+from .protocol import (
+    JobManifest,
+    ReplayStore,
+    build_job_manifest_from_training_job,
+    validate_result_manifest,
+)
 from .security import assert_no_execution_commands, assert_no_secrets, sanitize_mapping
 from .types import (
     JobStatus,
@@ -19,6 +27,7 @@ from .types import (
     TrainingJob,
     TrainingResult,
 )
+from .worker import ColabWorker
 
 
 def _detect_colab_runtime() -> bool:
@@ -32,13 +41,32 @@ def _detect_colab_runtime() -> bool:
 
 
 class ColabComputeProvider(ComputeProvider):
-    """Opportunistic Colab backend. Disconnect => INTERRUPTED, never SUCCESS."""
+    """Opportunistic Colab backend with optional authenticated worker.
+
+    Inject *worker* for in-process CI / local simulation.
+    Without worker or Colab runtime → UNKNOWN (never fake SUCCESS).
+    """
 
     name = "colab"
 
-    def __init__(self, *, enabled: bool = False, opportunistic: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool = False,
+        opportunistic: bool = True,
+        worker: Optional[ColabWorker] = None,
+        private_raw: Optional[bytes] = None,
+        public_raw: Optional[bytes] = None,
+        artifact_dir: Optional[Path] = None,
+        replay: Optional[ReplayStore] = None,
+    ) -> None:
         self.enabled = bool(enabled)
         self.opportunistic = bool(opportunistic)
+        self._worker = worker
+        self._private = private_raw
+        self._public = public_raw
+        self._artifact_dir = Path(artifact_dir) if artifact_dir else None
+        self._replay = replay or ReplayStore()
         self._force_status: Optional[ProviderStatus] = None
         self._force_disconnect: bool = False
 
@@ -59,6 +87,15 @@ class ColabComputeProvider(ComputeProvider):
                 supports_inference=False,
                 notes=("disabled_by_config",),
             )
+        # In-process authenticated worker counts as available for CI/tests.
+        if self._worker is not None:
+            return ProviderCapability(
+                name=self.name,
+                status=ProviderStatus.AVAILABLE,
+                supports_training=True,
+                supports_inference=False,
+                notes=("authenticated_worker", "heavy_only"),
+            )
         if _detect_colab_runtime():
             return ProviderCapability(
                 name=self.name,
@@ -76,14 +113,12 @@ class ColabComputeProvider(ComputeProvider):
         )
 
     def submit(self, job: TrainingJob, payload: Optional[Mapping[str, Any]] = None) -> TrainingResult:
-        # Sanitize first — never let secrets leave process.
         safe = sanitize_mapping(payload)
         try:
             assert_no_secrets(safe)
             assert_no_secrets(job.metadata)
             assert_no_execution_commands(safe)
             assert_no_execution_commands(job.metadata)
-            # Also check original payload for execution commands (defense in depth).
             assert_no_execution_commands(payload)
         except ValueError as exc:
             job.status = JobStatus.REJECTED
@@ -98,7 +133,6 @@ class ColabComputeProvider(ComputeProvider):
 
         job.provider = self.name
 
-        # Reject non-heavy workloads on Colab path.
         if not job.is_heavy():
             job.status = JobStatus.REJECTED
             job.metadata = {
@@ -119,8 +153,11 @@ class ColabComputeProvider(ComputeProvider):
             job.metadata = {**job.metadata, "reason": "session_disconnected"}
             return TrainingResult(job=job, provider_notes=("interrupted", "not_success"))
 
-        # Real Colab execution is out-of-process (notebook worker).
-        # Without an authenticated external session, mark UNKNOWN — never SUCCESS.
+        # Authenticated worker path (CI / local simulation / future Colab bridge).
+        if self._worker is not None and self._private is not None and self._public is not None:
+            return self._submit_via_worker(job, safe)
+
+        # No worker attached — external Colab session required.
         job.status = JobStatus.UNKNOWN
         job.metadata = {
             **job.metadata,
@@ -136,3 +173,89 @@ class ColabComputeProvider(ComputeProvider):
                 "provider": self.name,
             }
         return TrainingResult(job=job, provider_notes=("external_session_required", "untrusted_output"))
+
+    def _submit_via_worker(self, job: TrainingJob, safe_payload: dict[str, Any]) -> TrainingResult:
+        assert self._worker is not None and self._private is not None and self._public is not None
+        params = dict(safe_payload)
+        params.update(sanitize_mapping(job.metadata))
+        # Strip non-training metadata keys that are not params.
+        for k in list(params.keys()):
+            if k in ("reason", "artifact_path", "artifact_hash", "tenant_id"):
+                params.pop(k, None)
+
+        manifest = build_job_manifest_from_training_job(
+            job,
+            private_raw=self._private,
+            training_params=params,
+        )
+        wr = self._worker.process(manifest)
+
+        if not wr.ok or wr.result_manifest.status != JobStatus.SUCCESS.value:
+            job.status = JobStatus.REJECTED if wr.result_manifest.status == JobStatus.REJECTED.value else JobStatus.FAILED
+            job.metadata = {
+                **job.metadata,
+                "reason": ",".join(wr.reasons) or wr.result_manifest.status,
+                "result_manifest": wr.result_manifest.to_dict(),
+            }
+            return TrainingResult(
+                job=job,
+                provider_notes=tuple(wr.reasons) or ("worker_rejected",),
+            )
+
+        ok, reasons = validate_result_manifest(
+            wr.result_manifest,
+            public_raw=self._public,
+            expected_job=manifest,
+            expected_tenant=job.tenant_id,
+        )
+        if not ok:
+            job.status = JobStatus.FAILED
+            job.metadata = {
+                **job.metadata,
+                "reason": "result_validation_failed:" + ",".join(reasons),
+            }
+            return TrainingResult(job=job, provider_notes=tuple(reasons))
+
+        # Verify artifact checksum matches manifest.
+        from .protocol import sha256_bytes
+
+        actual = sha256_bytes(wr.artifact_bytes)
+        if actual != wr.result_manifest.artifact_sha256:
+            job.status = JobStatus.FAILED
+            job.metadata = {**job.metadata, "reason": "artifact_hash_mismatch"}
+            return TrainingResult(job=job, provider_notes=("artifact_hash_mismatch",))
+
+        artifact_path = ""
+        if self._artifact_dir is not None:
+            self._artifact_dir.mkdir(parents=True, exist_ok=True)
+            out = self._artifact_dir / wr.result_manifest.artifact_name
+            out.write_bytes(wr.artifact_bytes)
+            artifact_path = str(out)
+            job.artifact_ref = artifact_path
+        else:
+            job.artifact_ref = f"colab://{job.job_id}/{actual[:16]}"
+
+        job.status = JobStatus.SUCCESS
+        job.metrics = dict(wr.result_manifest.metrics)
+        job.provenance = {
+            **job.provenance,
+            **wr.result_manifest.provenance,
+            "result_signature_ok": True,
+            "protocol_version": wr.result_manifest.protocol_version,
+            "worker_version": wr.result_manifest.worker_version,
+        }
+        meta = {
+            **job.metadata,
+            "artifact_hash": actual,
+            "result_manifest": wr.result_manifest.to_dict(),
+            "tenant_id": job.tenant_id,
+        }
+        if artifact_path:
+            meta["artifact_path"] = artifact_path
+        job.metadata = meta
+        return TrainingResult(
+            job=job,
+            artifact_hash=actual,
+            checkpoint_hash=actual,
+            provider_notes=("colab_worker_completed", "signed_result"),
+        )
