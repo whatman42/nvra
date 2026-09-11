@@ -234,7 +234,7 @@ def _startup_composition() -> dict[str, Any]:
     from crypto.runtime.paths import PathResolver, set_resolver
     from crypto.runtime.startup import run_startup
 
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         root = Path(td)
         for name in ("state", "data", "logs", "config"):
             (root / name).mkdir(parents=True, exist_ok=True)
