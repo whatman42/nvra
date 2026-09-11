@@ -331,7 +331,7 @@ def qualify_inv003_ml_boundary() -> AreaResult:
 
 
 def run_stage8() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = Path(td)
         results = [
             qualify_experiment_spec(),
