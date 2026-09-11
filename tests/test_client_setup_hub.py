@@ -1,105 +1,118 @@
-"""Client Setup Hub — presence of setup surfaces and login guard."""
+"""Single-user Setup Center — no login gate; production GUI contract."""
 from __future__ import annotations
 
 import ast
-import os
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 
-def test_gui_source_has_client_setup_methods():
-    """Static check so CI without display/Qt native libs still validates the hub surface."""
-    src = Path("nvra_unified/gui.py").read_text(encoding="utf-8")
+FORBIDDEN_UI = (
+    "Create Account",
+    "LOCKED — login required",
+    "LOCKED - login required",
+    "enrollment_required",
+    "login_user",
+    "login_pass",
+)
+
+
+def _gui_source() -> str:
+    return Path("nvra_unified/gui.py").read_text(encoding="utf-8")
+
+
+def test_production_gui_has_no_login_controls():
+    src = _gui_source()
+    for token in FORBIDDEN_UI:
+        assert token not in src, f"Forbidden auth UI still present: {token!r}"
+    assert 'QLabel("Username")' not in src
+    assert 'QLabel("Password")' not in src
+    assert 'addRow("Username"' not in src
+    assert 'addRow("Password"' not in src
+    assert "Create Account" not in src
+
+
+def test_production_gui_has_setup_center_and_tabs():
+    src = _gui_source()
     tree = ast.parse(src)
     methods = {
         node.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     required = {
-        "client_setup_tab",
+        "setup_center_tab",
+        "dashboard_tab",
+        "crypto_tab",
+        "forex_tab",
+        "idx_tab",
+        "telegram_tab",
+        "ml_tab",
+        "settings_tab",
         "save_gemini",
         "test_gemini",
         "clear_gemini",
         "pick_google_client",
         "save_google_client",
+        "connect_google",
         "test_exchange",
         "clear_exchange",
+        "save_exchange",
         "test_telegram",
         "clear_telegram",
+        "save_telegram",
         "detect_mt5",
         "refresh_setup_status",
         "test_all_safe",
-        "save_exchange",
-        "save_telegram",
-        "setup_totp",
-        "_guard",
+        "finish_setup",
+        "_route_startup",
+        "run_gui",
     }
     missing = required - methods
-    assert not missing, f"Missing Client Setup methods: {sorted(missing)}"
+    assert not missing, f"Missing production GUI methods: {sorted(missing)}"
+    assert "_guard" not in methods
+    assert "enroll_account" not in methods
 
 
-def test_guard_requires_login_logic():
-    """_guard() returns False when logged_in is False — no Qt display required.
-
-    Instantiating QApplication on headless Linux CI aborts the process even when
-    libEGL is present (no platform plugin / display). The production _guard body
-    is pure boolean + message box; we exercise the boolean contract without a
-    real QWidget parent.
-    """
-    # Import only after confirming source still defines the contract
-    src = Path("nvra_unified/gui.py").read_text(encoding="utf-8")
-    assert "def _guard(self)" in src
-    assert "if not self.logged_in" in src
-
-    # Lightweight stand-in: same boolean gate as production _guard
-    class _GuardHost:
-        def __init__(self) -> None:
-            self.logged_in = False
-            self.warned = False
-
-        def _guard(self) -> bool:
-            if not self.logged_in:
-                self.warned = True
-                return False
-            return True
-
-    host = _GuardHost()
-    assert host._guard() is False
-    assert host.warned is True
-    host.logged_in = True
-    host.warned = False
-    assert host._guard() is True
-    assert host.warned is False
+def test_no_logged_in_gate():
+    src = _gui_source()
+    assert "self.logged_in" not in src
+    assert "def _guard" not in src
+    assert "if not self.logged_in" not in src
 
 
-def test_guard_runtime_qt_when_display_available(tmp_path, monkeypatch):
-    """Optional full Qt path — only when a real display/platform is available.
+def test_entrypoint_does_not_import_legacy_auth_gui():
+    """Production unified entry must not pull god.gui.main (legacy login GUI)."""
+    entry = Path("scripts/nvra_unified_entry.py").read_text(encoding="utf-8")
+    assert "god.gui.main" not in entry
+    assert "nvra_unified" in entry
+    main_py = Path("nvra_unified/__main__.py").read_text(encoding="utf-8")
+    assert "from .gui import run_gui" in main_py
+    assert "god.gui.main" not in main_py
 
-    Skipped on Linux CI and any host without DISPLAY / with known headless markers.
-    Windows runners with a desktop session can execute this for stronger coverage.
-    """
-    if sys.platform.startswith("linux") and (
-        os.environ.get("CI") == "true"
-        or not os.environ.get("DISPLAY")
-        or os.environ.get("QT_QPA_PLATFORM") == "offscreen"
-    ):
-        pytest.skip("Qt QApplication requires a usable display; skipped on headless Linux CI")
 
+def test_nvrafx_entry_uses_unified_gui():
+    """Windows EXE entry must launch nvra_unified.gui, not legacy god.gui.main."""
+    src = Path("scripts/nvrafx_entry.py").read_text(encoding="utf-8")
+    assert "from nvra_unified.gui import run_gui" in src or "nvra_unified.gui" in src
+    assert "from god.gui.main import run_gui" not in src
+
+
+def test_gui_builds_without_auth_state(tmp_path, monkeypatch):
+    """GUI module constructs without enrolled auth state."""
     monkeypatch.setenv("NVRA_HOME", str(tmp_path))
-    pytest.importorskip("PySide6")
-    try:
-        from PySide6.QtWidgets import QApplication
-        from nvra_unified.runtime import UnifiedRuntime
-        from nvra_unified.gui import NVRAUnifiedWindow
-    except ImportError as exc:
-        pytest.skip(f"Qt native runtime unavailable: {exc}")
+    src = _gui_source()
+    assert "NVRAUnifiedWindow" in src
+    assert "evaluate_setup_state" in src
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and "auth" in (node.module or ""):
+            names = {a.name for a in (node.names or [])}
+            forbidden = {"login", "create_account", "enroll_first_user", "verify_login", "AuthResult"}
+            assert not (names & forbidden), f"GUI must not import auth login APIs: {names & forbidden}"
 
-    app = QApplication.instance() or QApplication([])
-    rt = UnifiedRuntime()
-    win = NVRAUnifiedWindow(rt)
-    assert win.logged_in is False
-    assert win._guard() is False
+
+def test_google_oauth_is_not_login_gate():
+    src = _gui_source()
+    assert "Connect Google" in src or "connect_google" in src
+    assert "Google Sign-in" not in src
