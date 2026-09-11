@@ -215,10 +215,21 @@ class Database:
         }
 
     def close(self) -> None:
+        """Close the thread-local connection, checkpointing WAL first.
+
+        WAL checkpoint is required so Windows can delete temporary DB files
+        after tests (WinError 32 if -wal/-shm remain locked).
+        """
         conn = getattr(self._local, "conn", None)
         if conn is not None:
-            conn.close()
-            self._local.conn = None
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            try:
+                conn.close()
+            finally:
+                self._local.conn = None
 
     def __enter__(self) -> "Database":
         return self
