@@ -82,7 +82,7 @@ def qualify_safe_mode() -> AreaResult:
         constraints=MarketConstraints(min_amount=0.001, min_cost=1.0),
         entry_price=100.0,
     )
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = ExecutionStore(Path(td) / "s.db")
         adapter = MagicMock()
         adapter.exchange_id = "binance"
@@ -309,7 +309,7 @@ def qualify_invariants() -> AreaResult:
 
 
 def run_stage9() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = Path(td)
         results = [
             qualify_production_gate(),
