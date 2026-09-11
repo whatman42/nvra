@@ -293,7 +293,7 @@ def qualify_determinism(n: int = 20) -> AreaResult:
     from crypto.risk import MarketConstraints, RiskEngine, RiskPolicy
 
     hashes = []
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         for i in range(n):
             store = ExecutionStore(Path(td) / f"d{i}.db")
             engine = ExecutionEngine(
@@ -321,8 +321,9 @@ def qualify_determinism(n: int = 20) -> AreaResult:
                     }
                 )
             )
+            store.close()
     unique = len(set(hashes))
-    with tempfile.TemporaryDirectory() as td2:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td2:
         store = ExecutionStore(Path(td2) / "m.db")
         engine = ExecutionEngine(
             _mock_adapter(),
@@ -347,6 +348,7 @@ def qualify_determinism(n: int = 20) -> AreaResult:
                 "allowed": round(mut.allowed_quantity, 8),
             }
         )
+        store.close()
     return AreaResult(
         "determinism",
         "PASS" if unique == 1 else "FAIL",
@@ -359,7 +361,7 @@ def qualify_live_boundary() -> AreaResult:
     from crypto.execution import ExecutionEngine, ExecutionMode, ExecutionStore
     from crypto.risk import RiskEngine, RiskPolicy
 
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = ExecutionStore(Path(td) / "live.db")
         adapter = _mock_adapter()
         engine = ExecutionEngine(
@@ -368,6 +370,7 @@ def qualify_live_boundary() -> AreaResult:
         trading_on = bool(getattr(adapter, "trading_enabled", False))
         engine.set_mode(ExecutionMode.LIVE)
         still_off = adapter.trading_enabled is False or not adapter.trading_enabled
+        store.close()
     return AreaResult(
         "live_boundary",
         "PASS" if (not trading_on) else "FAIL",
@@ -400,7 +403,7 @@ def qualify_invalid_transition() -> AreaResult:
 
 
 def run_stage6() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = Path(td)
         results = [
             qualify_order_state_machine(),
