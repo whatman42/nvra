@@ -321,7 +321,7 @@ def run_integrated(
     handler_result_hash = stable_hash(handler_state)
     event_stream_hash = stable_hash(handler_state.get("processed", []))
 
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store_path = Path(td) / "exec.sqlite"
         risk_store = _risk_and_store(cfg, analysis, store_path)
     risk_hash = stable_hash(risk_store["risk"])
