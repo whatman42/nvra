@@ -107,7 +107,7 @@ def _multi_handler_real(cfg: S23Config, *, order: str = "canonical") -> dict[str
     from god.orchestration import EventBus, Worker, CheckpointStore, ContextStore
     from god.orchestration.models import EventType, create_context, create_event
 
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         handlers = _build_handlers(Path(td) / "mem.sqlite")
         if order == "reversed":
             handlers = list(reversed(handlers))
@@ -145,6 +145,23 @@ def _multi_handler_real(cfg: S23Config, *, order: str = "canonical") -> dict[str
                     bus.publish(fe)
                     worker.process_one()
         ctx2 = contexts.get(ctx.context_id)
+        # Release SQLite handles before TemporaryDirectory cleanup (Windows WinError 32).
+        for h in handlers:
+            store = getattr(h, "store", None) or getattr(h, "_store", None)
+            db = getattr(store, "db", None) or getattr(store, "_db", None) if store is not None else None
+            if db is not None and hasattr(db, "close"):
+                try:
+                    db.close()
+                except Exception:
+                    pass
+            eng = getattr(h, "research_engine", None) or getattr(h, "_research_engine", None)
+            st = getattr(eng, "store", None) if eng is not None else None
+            db2 = getattr(st, "db", None) or getattr(st, "_db", None) if st is not None else None
+            if db2 is not None and hasattr(db2, "close"):
+                try:
+                    db2.close()
+                except Exception:
+                    pass
         return {
             "order": order,
             "processed": processed,
@@ -201,7 +218,7 @@ def _startup() -> dict[str, Any]:
     from crypto.runtime.paths import PathResolver, set_resolver
     from crypto.runtime.startup import run_startup
 
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         root = Path(td)
         for n in ("state", "data", "logs", "config"):
             (root / n).mkdir(parents=True, exist_ok=True)
