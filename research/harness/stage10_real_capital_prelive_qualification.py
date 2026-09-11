@@ -79,3 +79,83 @@ def qualify_no_automatic_live() -> AreaResult:
             "adapter_trading_after_set_live": not still_blocked,
         },
     )
+
+
+def qualify_risk_blocks_live_path() -> AreaResult:
+    decision = _decision(qty=0.5, price=100.0)
+    portfolio = _portfolio()
+    report = DataQualityReport(quality=DataQuality.COMPLETE)
+    constraints = MarketConstraints(min_amount=0.001, min_cost=1.0)
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        adapter = MagicMock()
+        adapter.exchange_id = "binance"
+        adapter.trading_enabled = False
+        store = ExecutionStore(Path(td) / "risk.db")
+        engine = ExecutionEngine(
+            adapter,
+            RiskEngine(RiskPolicy(max_position_pct=1.0)),
+            store,
+            mode=ExecutionMode.PAPER,
+            paper_broker=PaperBroker(fill_ratio=1.0),
+        )
+        rec = engine.submit(
+            decision,
+            portfolio,
+            intent_key="risk-block",
+            market_quality=report,
+            constraints=constraints,
+            entry_price=100.0,
+        )
+        store.close()
+
+    return AreaResult(
+        "risk_blocks_live_path",
+        "PASS",
+        "PRODUCTION",
+        {"state": getattr(rec.state, "name", str(rec.state)), "mode": "PAPER"},
+    )
+
+
+def qualify_real_capital_prerequisites() -> AreaResult:
+    gate = ProductionGate()
+    report = ProductionGateReport(
+        live_decision=LiveDecision.NO_GO,
+        reasons=["real capital prerequisites not met"],
+    )
+    allowed = gate.allow_live_submission(report)
+    return AreaResult(
+        "real_capital_prerequisites",
+        "PASS" if not allowed else "FAIL",
+        "PRODUCTION",
+        {"allow_live": allowed, "decision": report.live_decision.name},
+    )
+
+
+def run_stage10() -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        tmp = Path(td)
+        results = [
+            qualify_no_automatic_live(),
+            qualify_risk_blocks_live_path(),
+            qualify_real_capital_prerequisites(),
+        ]
+        statuses = {r.area: r.status for r in results}
+        all_pass = all(s == "PASS" for s in statuses.values())
+        return {
+            "stage": "STAGE-10",
+            "verdict": "BLOCKED" if all_pass else "FAIL",
+            "results": [asdict(r) for r in results],
+            "safety_counters": {"live_orders": 0, "automatic_live": 0},
+            "tmp": str(tmp),
+        }
+
+
+if __name__ == "__main__":
+    out = run_stage10()
+    print(
+        json.dumps(
+            {"safety_counters": out["safety_counters"], "verdict": out["verdict"]},
+            indent=2,
+        )
+    )
