@@ -94,7 +94,7 @@ class TestRegistry:
         assert providers[0].version == "2.40"
 
     def test_sqlite_persistence(self):
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             db = Path(td) / "caps.db"
             reg1 = CapabilityRegistry(db_path=db)
             p = CapabilityProvider.create(
