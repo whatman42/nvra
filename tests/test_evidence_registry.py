@@ -28,73 +28,67 @@ def test_review_artifact_roundtrip():
         repository="whatman42/GOD",
         commit_sha="6aaa33be1f46b4ad8e52a8d2fa689d9da2488c7e",
         reviewer_mode=ReviewerMode.INDEPENDENT,
-        decision=ReviewDecision.ACCEPT,
-        claims=[claim],
-        promotion_state=PromotionState.UNDER_REVIEW,
-        notes="unit-test",
+        impact_classification=[ImpactDomain.REPOSITORY, ImpactDomain.MEMORY],
+        evidence_claims=[claim],
+        decision=ReviewDecision.RESEARCH_ONLY,
+        promotion_state=PromotionState.RESEARCH_ONLY,
+        remaining_uncertainty="No real Windows/MT evidence",
+        change_summary="Initial Evidence Registry introduction",
     )
-    assert art.decision == ReviewDecision.ACCEPT
-    assert art.claims[0].grade == EvidenceGrade.E1
     d = art.to_dict()
-    restored = ReviewArtifact.from_dict(d)
-    assert restored.artifact_id == art.artifact_id
-    assert restored.decision == ReviewDecision.ACCEPT
+    art2 = ReviewArtifact.from_dict(d)
+    assert art2.artifact_id == art.artifact_id
+    assert art2.commit_sha == art.commit_sha
+    assert art2.decision == ReviewDecision.RESEARCH_ONLY
+    assert len(art2.evidence_claims) == 1
+    assert art2.evidence_claims[0].grade == EvidenceGrade.E1
 
 
-def test_evidence_registry_persist_and_query():
+def test_registry_append_and_get():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        from pathlib import Path
-
-        reg = EvidenceRegistry(Path(tmp) / "ev.db")
+        reg = EvidenceRegistry(root=tmp)
         claim = EvidenceClaim(
-            domain=ImpactDomain.QUANT,
+            domain=ImpactDomain.ACCOUNTING,
             grade=EvidenceGrade.E2,
-            claim="Deterministic replay",
-            evidence_refs=["hash"],
-            environment="ci",
+            claim="Virtual PnL carries fees",
+            evidence_refs=["tests/test_agent.py"],
+            environment="linux-ci",
         )
         art = ReviewArtifact.create(
-            repository="whatman42/nvra",
-            commit_sha="sha1",
+            repository="whatman42/GOD",
+            commit_sha="abc123",
             reviewer_mode=ReviewerMode.INDEPENDENT,
+            impact_classification=[ImpactDomain.ACCOUNTING],
+            evidence_claims=[claim],
             decision=ReviewDecision.ACCEPT_WITH_UNCERTAINTY,
-            claims=[claim],
             promotion_state=PromotionState.UNDER_REVIEW,
-            notes="persist",
+            remaining_uncertainty="Real broker costs unknown",
         )
-        reg.put(art)
-        got = reg.get(art.artifact_id)
-        assert got is not None
-        assert got.decision == ReviewDecision.ACCEPT_WITH_UNCERTAINTY
+        aid = reg.append(art)
+        assert aid == art.artifact_id
+        loaded = reg.get(aid)
+        assert loaded is not None
+        assert loaded.decision == ReviewDecision.ACCEPT_WITH_UNCERTAINTY
+        assert loaded.promotion_state == PromotionState.UNDER_REVIEW
+
+
+def test_registry_list_and_latest():
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        reg = EvidenceRegistry(root=tmp)
+        for i, state in enumerate([PromotionState.RESEARCH_ONLY, PromotionState.UNDER_REVIEW]):
+            art = ReviewArtifact.create(
+                repository="whatman42/GOD",
+                commit_sha=f"sha{i}",
+                reviewer_mode=ReviewerMode.INDEPENDENT,
+                impact_classification=[ImpactDomain.RESEARCH],
+                evidence_claims=[],
+                decision=ReviewDecision.RESEARCH_ONLY,
+                promotion_state=state,
+                remaining_uncertainty="test",
+            )
+            reg.append(art)
+        recent = reg.list_recent(10)
+        assert len(recent) == 2
         latest = reg.latest_for_commit("sha1")
         assert latest is not None
         assert latest.promotion_state == PromotionState.UNDER_REVIEW
-        reg.close()
-
-
-def test_evidence_registry_list_all():
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        from pathlib import Path
-
-        reg = EvidenceRegistry(Path(tmp) / "ev2.db")
-        for i in range(2):
-            claim = EvidenceClaim(
-                domain=ImpactDomain.REPOSITORY,
-                grade=EvidenceGrade.E0,
-                claim=f"c{i}",
-                evidence_refs=[],
-                environment="test",
-            )
-            art = ReviewArtifact.create(
-                repository="r",
-                commit_sha=f"s{i}",
-                reviewer_mode=ReviewerMode.INDEPENDENT,
-                decision=ReviewDecision.RESEARCH_ONLY,
-                claims=[claim],
-                promotion_state=PromotionState.BLOCKED,
-                notes=f"n{i}",
-            )
-            reg.put(art)
-        items = list(reg.list_all())
-        assert len(items) >= 2
-        reg.close()
