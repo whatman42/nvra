@@ -1,6 +1,8 @@
 """SetupState readiness — single-user, no identity."""
 from __future__ import annotations
 
+import builtins
+import sys
 from unittest.mock import MagicMock
 
 from nvra_unified.setup_state import (
@@ -13,7 +15,25 @@ from nvra_unified.setup_state import (
 
 
 def test_fresh_state_not_configured(tmp_path, monkeypatch):
+    """Fresh install with zero configured services must be NOT_CONFIGURED.
+
+    Isolate from host environment: Windows CI images ship MetaTrader5, which
+    would otherwise count as a useful service and yield PARTIAL. The contract
+    under test is configuration readiness of *user* services, not host tooling.
+    """
     monkeypatch.setenv("NVRA_HOME", str(tmp_path))
+
+    real_import = builtins.__import__
+
+    def _no_mt5(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "MetaTrader5" or (isinstance(name, str) and name.startswith("MetaTrader5.")):
+            raise ImportError("isolated: MetaTrader5 unavailable in fresh-state test")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _no_mt5)
+    # Also block detect_mt5 if the package path resolves.
+    monkeypatch.setitem(sys.modules, "MetaTrader5", None)
+
     rt = MagicMock()
     rt.secrets.telegram_configured.return_value = False
     rt.secrets.gemini_configured.return_value = False
