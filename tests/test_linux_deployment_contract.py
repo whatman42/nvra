@@ -8,7 +8,14 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+_LINUX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Linux/Oracle deployment filesystem and systemd contract",
+)
 
 
 def _load_entry():
@@ -51,6 +58,7 @@ def test_autonomous_runtime_importable():
     assert callable(run_autonomous_runtime)
 
 
+@_LINUX_ONLY
 def test_policy_path_under_data_dir():
     from god.live.autonomous_policy import POLICY_FILENAME, default_policy_path
     path = default_policy_path(Path("/var/lib/nvra"))
@@ -58,6 +66,16 @@ def test_policy_path_under_data_dir():
     assert str(path).startswith("/var/lib/nvra")
 
 
+def test_policy_path_joins_data_dir_cross_platform(tmp_path):
+    """Cross-platform: policy path is always under the provided data dir."""
+    from god.live.autonomous_policy import POLICY_FILENAME, default_policy_path
+    data = tmp_path / "nvra_data"
+    path = default_policy_path(data)
+    assert path.name == POLICY_FILENAME
+    assert path.parent == data
+
+
+@_LINUX_ONLY
 def test_systemd_unit_contract():
     unit = (ROOT / "deploy" / "oracle" / "nvra.service").read_text(encoding="utf-8")
     assert "User=nvra" in unit
