@@ -191,6 +191,13 @@ def test_worker_rejects_exec_injection(keys, worker):
 
 
 def test_worker_rejects_shell_and_order_params(keys, worker):
+    """Reject shell/order params at build-time and/or worker path.
+
+    Production intentionally fails closed in build_job_manifest_from_training_job
+    via assert_no_execution_commands. That ValueError is a valid reject.
+    Worker path is also exercised when a manifest can be constructed without
+    the build-time gate (defensive double-check).
+    """
     priv, _ = keys
     for bad in (
         {"shell": "rm -rf /"},
@@ -205,9 +212,30 @@ def test_worker_rejects_shell_and_order_params(keys, worker):
             dataset_hash="c" * 64,
             model_type="random_forest",
         )
-        m = build_job_manifest_from_training_job(job, private_raw=priv, training_params=bad)
+        try:
+            m = build_job_manifest_from_training_job(job, private_raw=priv, training_params=bad)
+        except ValueError as exc:
+            # Build-time fail-closed is the preferred production path
+            assert "rejected" in str(exc).lower() or "execution" in str(exc).lower()
+            continue
         wr = worker.process(m)
         assert not wr.ok, bad
+
+
+def test_build_rejects_execution_commands(keys):
+    """Explicit unit: build_job_manifest_from_training_job must raise on order/shell."""
+    priv, _ = keys
+    job = TrainingJob(
+        tenant_id="tenant-A",
+        model_id="m",
+        workload_type=WorkloadType.HEAVY.value,
+        dataset_hash="c" * 64,
+        model_type="random_forest",
+    )
+    with pytest.raises(ValueError, match="execution command rejected|place_order|shell"):
+        build_job_manifest_from_training_job(
+            job, private_raw=priv, training_params={"place_order": {"symbol": "EURUSD"}}
+        )
 
 
 def test_worker_rejects_disallowed_model_type(keys, worker):
