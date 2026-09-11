@@ -52,12 +52,13 @@ def test_gui_exception_isolated_from_running_core(monkeypatch, tmp_path: Path) -
     thread = threading.Thread(target=core_loop, daemon=True)
     thread.start()
 
-    def crashing_gui(*, autostart_mode: bool = False) -> int:
+    def crashing_gui() -> int:
         raise RuntimeError("injected GUI failure")
 
-    fake_gui_module = types.ModuleType("god.gui.main")
+    # Production path uses nvra_unified.gui — mock that, not legacy god.gui.main.
+    fake_gui_module = types.ModuleType("nvra_unified.gui")
     fake_gui_module.run_gui = crashing_gui
-    monkeypatch.setitem(sys.modules, "god.gui.main", fake_gui_module)
+    monkeypatch.setitem(sys.modules, "nvra_unified.gui", fake_gui_module)
 
     # _run_gui is the containment boundary used by the product entrypoint.
     # It must convert the GUI exception into a return code rather than raising.

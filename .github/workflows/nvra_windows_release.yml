@@ -3,7 +3,7 @@ name: NVRA Windows Release
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: ["Windows Build"]
+    workflows: ["Windows Build", "NVRA CI and Windows Build"]
     types: [completed]
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
       - name: Build NVRA.exe
         shell: pwsh
         run: |
-          python -m PyInstaller packaging/nvrafx_onefile.spec --noconfirm --clean
+          python -m PyInstaller packaging/nvra_onefile.spec --noconfirm --clean
           if (-not (Test-Path dist/NVRA.exe)) { throw "NVRA.exe missing" }
           if (Test-Path dist/NUNG.exe) { throw "NUNG.exe must not be produced" }
           if (Test-Path dist/NVRAFX.exe) { throw "NVRAFX.exe must not be produced as product binary" }

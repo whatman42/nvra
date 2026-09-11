@@ -9,9 +9,13 @@ on:
       - "scripts/**"
       - "god/**"
       - "crypto/**"
+      - "nvra_unified/**"
+      - "tests/**"
       - "requirements.txt"
       - "constraints.txt"
       - ".github/workflows/windows-build.yml"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/nvra_windows_release.yml"
 
 permissions:
   contents: read
@@ -49,7 +53,7 @@ jobs:
 
       - name: GUI import smoke
         shell: pwsh
-        run: python -c "from god.gui.main import NVRAFXWindow; print('GUI_IMPORT_OK')"
+        run: python -c "from nvra_unified.gui import run_gui; print('GUI_IMPORT_OK')"
 
       - name: Secret scan
         shell: pwsh
