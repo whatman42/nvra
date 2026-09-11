@@ -292,7 +292,7 @@ def qualify_data_ingest_validation() -> Stage4Result:
 
 
 def run_stage4() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         tmp = Path(td)
         results = [
             qualify_content_hash(),
