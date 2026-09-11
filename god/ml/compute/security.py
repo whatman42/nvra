@@ -43,6 +43,16 @@ EXECUTION_COMMAND_FRAGMENTS = (
     "promote_execution",
     "set_live",
     "enable_live",
+    # Shell / process injection (must reject, not silently strip)
+    "shell",
+    "subprocess",
+    "os.system",
+    "system(",
+    "popen",
+    "command",
+    "__import__",
+    "eval(",
+    "exec(",
 )
 
 
@@ -120,8 +130,16 @@ def assert_no_execution_commands(data: Any) -> None:
 
 
 def sanitize_and_guard(data: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Sanitize secrets then assert no residual secrets or execution commands."""
+    """Reject secrets/execution commands on raw input, then return sanitized copy.
+
+    Order matters: keys matching both secret and execution fragments (e.g. mt5_order)
+    must be rejected before sanitize_mapping strips them as secrets.
+    """
+    if data is None:
+        data = {}
+    assert_no_execution_commands(data)
+    assert_no_secrets(data)
     clean = sanitize_mapping(data)
-    assert_no_secrets(clean)
     assert_no_execution_commands(clean)
+    assert_no_secrets(clean)
     return clean
