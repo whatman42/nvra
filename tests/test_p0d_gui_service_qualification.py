@@ -172,7 +172,11 @@ def test_service_resume_sigkill_then_recover_no_unsafe_exec(tmp_path: Path):
     else:
         proc.kill()
         pytest.fail("worker did not reach RUNNING")
-    proc.send_signal(signal.SIGKILL)
+    # Platform-correct hard kill: SIGKILL on POSIX, TerminateProcess on Windows.
+    if sys.platform == "win32":
+        proc.kill()
+    else:
+        proc.send_signal(signal.SIGKILL)
     proc.wait(timeout=5)
     completed = subprocess.run(
         [PYTHON, str(WORKER), "--workdir", str(workdir), "--mode", "recover"],
