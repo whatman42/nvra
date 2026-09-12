@@ -1,7 +1,8 @@
-"""Exchange gateway package (Phase 2 — READ ONLY).
+"""Exchange gateway package.
 
-Live order execution is disabled. Adapters raise TradingDisabledError
-for create_order / cancel_order.
+Adapters translate venue APIs into domain models. Live order submission
+is gated by ExchangeAdapter.enable_trading + broker mode policy +
+ProductionGate. Tokocrypto uses a native REST adapter (no CCXT write path).
 """
 
 from crypto.exchanges.base import ExchangeAdapter

@@ -5,7 +5,7 @@ NVRA supports two explicit modes per broker: `DEMO` and `REAL`.
 | Broker | DEMO | REAL |
 |---|---|---|
 | Binance | native sandbox/testnet when supported | explicit gated API execution |
-| Tokocrypto | native sandbox/testnet when supported | explicit gated API execution |
+| Tokocrypto | **no native sandbox** — internal paper only | explicit gated native REST execution |
 | INDODAX | native sandbox/testnet when supported | explicit gated API execution |
 | MetaTrader 5 | must connect to a DEMO account | must connect to a LIVE account |
 
@@ -31,3 +31,14 @@ accounts and REAL mode rejects DEMO accounts.
 
 API keys, passwords and tokens remain outside YAML and source control.
 Prefer trade-only API keys with withdrawals disabled.
+
+
+## Tokocrypto (no native DEMO venue)
+
+Tokocrypto REST is production-only. NVRA therefore:
+
+1. Keeps `tokocrypto.mode: DEMO` / `allow_real: false` by default.
+2. Blocks production `POST /open/v1/orders` while `sandbox=true`.
+3. Routes simulated fills through the internal `PaperBroker`.
+4. Requires REAL mode + `allow_real` + dual env confirmation + ProductionGate before live submit.
+5. Prefers trade-only API keys (`canWithdraw=0`).
