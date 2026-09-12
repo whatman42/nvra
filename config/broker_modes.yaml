@@ -1,7 +1,10 @@
 # Per-broker execution profile.
-# DEMO = exchange demo/testnet where supported.
+# DEMO = exchange demo/testnet where supported, else internal paper only.
 # REAL = real account, but still requires environment authorization.
 # Never put API keys/passwords in this file.
+#
+# Tokocrypto has NO native sandbox/testnet. DEMO for tokocrypto must use
+# NVRA internal paper simulator — never production order endpoints.
 
 brokers:
   binance:
