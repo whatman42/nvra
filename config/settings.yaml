@@ -86,9 +86,10 @@ telegram:
 
 # Broker execution profiles. Each broker independently supports DEMO or REAL.
 # REAL additionally requires explicit environment authorization.
+# Tokocrypto default is REAL-ready (option A); order submit still requires dual env + gates.
 brokers:
   binance: {mode: DEMO, sandbox: true, allow_real: false}
-  tokocrypto: {mode: DEMO, sandbox: true, allow_real: false}
+  tokocrypto: {mode: REAL, sandbox: false, allow_real: true}
   indodax: {mode: DEMO, sandbox: true, allow_real: false}
   mt5: {mode: DEMO, sandbox: true, allow_real: false}
 
