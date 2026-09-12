@@ -3,8 +3,11 @@
 # REAL = real account, but still requires environment authorization.
 # Never put API keys/passwords in this file.
 #
-# Tokocrypto has NO native sandbox/testnet. DEMO for tokocrypto must use
-# NVRA internal paper simulator — never production order endpoints.
+# Tokocrypto has NO native sandbox/testnet.
+# Default profile is REAL + allow_real (option A) so the venue is live-ready,
+# but order submit remains OFF until dual env confirmation + ProductionGate +
+# risk/data/health/permission/preflight all pass. Prefer trade-only API keys
+# with withdrawal disabled.
 
 brokers:
   binance:
@@ -12,9 +15,9 @@ brokers:
     sandbox: true
     allow_real: false
   tokocrypto:
-    mode: DEMO
-    sandbox: true
-    allow_real: false
+    mode: REAL
+    sandbox: false
+    allow_real: true
   indodax:
     mode: DEMO
     sandbox: true
