@@ -19,17 +19,24 @@ sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 
 
 def stable_hash(obj: Any) -> str:
-    payload = json.dumps(obj, sort_keys=True, default=str, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if isinstance(obj, (bytes, bytearray)):
+        data = bytes(obj)
+    elif isinstance(obj, str):
+        data = obj.encode()
+    else:
+        data = json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(data).hexdigest()
 
 
 @dataclass
 class FinalConfig:
-    seed: int = 1
+    seed: int = 42
+    symbol: str = "EURUSD"
     n_bars: int = 32
-    symbol: str = "NVRA"
-    price: float = 100.0
-    quantity: float = 1.0
+    quantity: float = 0.1
+    price: float = 1.1
+    correlation_id: str = "stage2.2"
+    logical_ts: int = 1_700_000_000_000
 
 
 @dataclass
@@ -47,30 +54,31 @@ class FinalResult:
     startup_hash: str
     state_hash: str
     final_result_hash: str
-    platform: str = field(default_factory=lambda: platform.platform())
-    python: str = field(default_factory=lambda: sys.version.split()[0])
+    python_version: str
+    platform: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def semantic_bundle(self) -> dict[str, str]:
-        return {
-            "input_hash": self.input_hash,
-            "multi_handler_hash": self.multi_handler_hash,
-            "event_stream_hash": self.event_stream_hash,
-            "analysis_hash": self.analysis_hash,
-            "research_hash": self.research_hash,
-            "decision_hash": self.decision_hash,
-            "risk_hash": self.risk_hash,
-            "startup_hash": self.startup_hash,
-            "state_hash": self.state_hash,
-            "final_result_hash": self.final_result_hash,
-        }
+        keys = (
+            "input_hash",
+            "multi_handler_hash",
+            "event_stream_hash",
+            "analysis_hash",
+            "research_hash",
+            "decision_hash",
+            "risk_hash",
+            "startup_hash",
+            "state_hash",
+            "final_result_hash",
+        )
+        return {k: getattr(self, k) for k in keys}
 
 
 def _bars(seed: int, n: int, symbol: str) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    price = 100.0 + (seed % 7) * 0.1
+    x, price, out = seed & 0xFFFFFFFF, 1.1, []
     for i in range(n):
-        price = round(price * (1.0 + ((seed * (i + 1)) % 5 - 2) * 0.001), 5)
+        x = (1664525 * x + 1013904223) & 0xFFFFFFFF
+        price = round(price + ((x % 2001) - 1000) / 1e6, 5)
         out.append({"i": i, "symbol": symbol, "close": price, "logical_ts": 1_700_000_000_000 + i * 60_000})
     return out
 
@@ -88,29 +96,25 @@ def _analysis(bars: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _multi_handler(cfg: FinalConfig, analysis: dict[str, Any], order: str = "canonical") -> dict[str, Any]:
+def _multi_handler(cfg: FinalConfig, analysis: dict[str, Any], *, order: str = "canonical") -> dict[str, Any]:
     from god.core.events import Event, EventBus
 
     bus = EventBus()
     processed: list[dict[str, Any]] = []
 
-    def curiosity(ev: Event) -> None:
-        processed.append({"handler": "curiosity", "type": ev.type, "payload": dict(ev.payload)})
+    def make(name: str):
+        def _h(ev: Event) -> None:
+            processed.append({"handler": name, "type": ev.type, "payload": dict(ev.payload)})
 
-    def research(ev: Event) -> None:
-        processed.append({"handler": "research", "type": ev.type, "payload": dict(ev.payload)})
-
-    def strategy(ev: Event) -> None:
-        processed.append({"handler": "strategy", "type": ev.type, "payload": dict(ev.payload)})
+        return _h
 
     handlers = [
-        ("curiosity", curiosity),
-        ("research", research),
-        ("strategy", strategy),
+        ("curiosity", make("curiosity")),
+        ("research", make("research")),
+        ("strategy", make("strategy")),
     ]
     if order == "reversed":
         handlers = list(reversed(handlers))
-
     names = [n for n, _ in handlers]
     for name, fn in handlers:
         bus.subscribe("BAR", fn)
@@ -118,7 +122,7 @@ def _multi_handler(cfg: FinalConfig, analysis: dict[str, Any], order: str = "can
     for bar in _bars(cfg.seed, min(8, cfg.n_bars), cfg.symbol):
         bus.publish(Event(type="BAR", payload=bar))
 
-    return {"handlers": names, "processed": processed, "analysis_ref": analysis.get("last")}
+    return {"handler_names": names, "processed": processed, "analysis_ref": analysis.get("last")}
 
 
 def _research_decision(analysis: dict[str, Any], cfg: FinalConfig) -> dict[str, Any]:
@@ -244,14 +248,18 @@ def run_final(
         startup_hash=startup_hash,
         state_hash=state_hash,
         final_result_hash=final_result_hash,
+        python_version=sys.version.split()[0],
+        platform=platform.platform(),
         metadata={
-            "handlers": mh["handlers"],
+            "handler_order": handler_order,
             "startup": startup,
             "live_authorized": False,
-            "risk": risk,
+            "duplicate_effects": 0,
+            "mutate": mutate,
+            "handlers": mh.get("handler_names"),
         },
     )
 
 
-def run_final_n(cfg: FinalConfig, n: int) -> list[FinalResult]:
+def run_final_n(cfg: FinalConfig, n: int = 100) -> list[FinalResult]:
     return [run_final(cfg, run_id=f"run-{i}") for i in range(n)]
