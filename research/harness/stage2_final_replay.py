@@ -90,67 +90,129 @@ def _analysis(bars: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "n": len(closes),
         "mean": round(mean, 8),
-        "var": round(var, 8),
+        "var": round(var, 12),
         "trend": round(closes[-1] - closes[0], 8),
         "last": closes[-1],
+        "pipeline": "synthetic_internal",
     }
 
 
 def _multi_handler(cfg: FinalConfig, analysis: dict[str, Any], *, order: str = "canonical") -> dict[str, Any]:
-    from god.core.events import Event, EventBus
-
-    bus = EventBus()
-    processed: list[dict[str, Any]] = []
-
-    def make(name: str):
-        def _h(ev: Event) -> None:
-            processed.append({"handler": name, "type": ev.type, "payload": dict(ev.payload)})
-
-        return _h
+    """Production handlers with engines=None (architecture-supported DI)."""
+    from god.orchestration import EventBus, Worker, CheckpointStore, ContextStore
+    from god.orchestration.handlers import (
+        CuriosityHandler,
+        ResearchHandler,
+        StrategyHandler,
+        DriftRegimeHandler,
+        PolicyCapitalHandler,
+        RealityRCAHandler,
+        ShadowHandler,
+    )
+    from god.orchestration.models import EventType, create_context, create_event
 
     handlers = [
-        ("curiosity", make("curiosity")),
-        ("research", make("research")),
-        ("strategy", make("strategy")),
+        CuriosityHandler(),
+        ResearchHandler(),
+        StrategyHandler(),
+        DriftRegimeHandler(),
+        PolicyCapitalHandler(),
+        RealityRCAHandler(),
+        ShadowHandler(),
     ]
     if order == "reversed":
         handlers = list(reversed(handlers))
-    names = [n for n, _ in handlers]
-    for name, fn in handlers:
-        bus.subscribe("BAR", fn)
 
-    for bar in _bars(cfg.seed, min(8, cfg.n_bars), cfg.symbol):
-        bus.publish(Event(type="BAR", payload=bar))
+    bus = EventBus(maxsize=1024)
+    contexts = ContextStore()
+    checkpoints = CheckpointStore()
+    worker = Worker(bus, contexts, checkpoints, handlers=handlers, poison_threshold=5)
 
-    return {"handler_names": names, "processed": processed, "analysis_ref": analysis.get("last")}
+    ctx = create_context(correlation_id=cfg.correlation_id, created_at="L0")
+    contexts.save(ctx)
+    obs = create_event(
+        EventType.OBSERVATION,
+        correlation_id=cfg.correlation_id,
+        context_id=ctx.context_id,
+        payload_ref={
+            "analysis_mean": analysis["mean"],
+            "symbol": cfg.symbol,
+            "expected_metrics": {"trend": float(analysis["trend"]), "mean": float(analysis["mean"])},
+            "noise": 0.0,
+        },
+        sequence=0,
+    )
+    bus.publish(obs)
+
+    processed: list[str] = []
+    for _ in range(80):
+        ev = worker.process_one()
+        if ev is None and bus.pending() == 0:
+            break
+        if ev is not None:
+            processed.append(ev.event_type.value)
+            while bus.pending() > 0:
+                fe = bus.consume()
+                if fe is None:
+                    break
+                bus.publish(fe)
+                worker.process_one()
+
+    ctx2 = contexts.get(ctx.context_id)
+    return {
+        "order": order,
+        "processed": processed,
+        "completed_nodes": list(ctx2.completed_nodes) if ctx2 else [],
+        "evidence_index": dict(ctx2.evidence_index) if ctx2 else {},
+        "handler_names": [type(h).__name__ for h in handlers],
+    }
 
 
 def _research_decision(analysis: dict[str, Any], cfg: FinalConfig) -> dict[str, Any]:
     research = {
-        "signal": "BUY" if analysis["trend"] >= 0 else "SELL",
-        "confidence": round(min(1.0, abs(analysis["trend"]) * 10 + 0.2), 6),
-        "mean": analysis["mean"],
+        "hypothesis": "trend_follow" if analysis["trend"] >= 0 else "mean_revert",
+        "confidence": round(min(1.0, abs(analysis["trend"]) * 100), 6),
+        "source": "internal_synthetic",
+        "fixture": True,
     }
     decision = {
-        "action": research["signal"],
-        "symbol": cfg.symbol,
-        "quantity": cfg.quantity,
-        "price": cfg.price,
-        "confidence": research["confidence"],
+        "side": "BUY" if analysis["trend"] >= 0 else "SELL",
+        "size": cfg.quantity,
+        "mode": "PAPER",
+        "live_authorized": False,
+        "research_hypothesis": research["hypothesis"],
     }
     return {"research": research, "decision": decision}
 
 
 def _risk(cfg: FinalConfig, decision: dict[str, Any]) -> dict[str, Any]:
-    from god.risk.engine import PortfolioState, Proposal, RiskEngine
+    from crypto.risk.engine import RiskEngine
+    from crypto.risk.models import Side, TradeProposal
+    from crypto.portfolio.models import ExposureBreakdown, PortfolioSnapshot
 
-    prop = Proposal(
-        symbol=str(decision["symbol"]),
-        side=str(decision["action"]),
-        quantity=float(decision["quantity"]),
-        price=float(decision.get("price") or cfg.price),
+    port = PortfolioSnapshot(
+        equity=10_000.0,
+        available_balance=10_000.0,
+        reserved_balance=0.0,
+        holdings=(),
+        positions=(),
+        unrealized_pnl=0.0,
+        realized_pnl=0.0,
+        fees=0.0,
+        exposure=ExposureBreakdown(gross=0.0, net=0.0),
+        timestamp_ms=cfg.logical_ts,
     )
-    port = PortfolioState(cash=1_000_000.0, positions={})
+    side = Side.BUY if decision["side"] == "BUY" else Side.SELL
+    prop = TradeProposal(
+        exchange_id="paper",
+        account_id="demo",
+        symbol=cfg.symbol,
+        side=side,
+        requested_quantity=decision["size"],
+        requested_price=cfg.price,
+        strategy_id="stage2.2",
+        timestamp_ms=cfg.logical_ts,
+    )
     eng = RiskEngine()
     eng.set_reconciliation_ok(True)
     d = eng.evaluate(prop, port, entry_price=cfg.price, exchange_available=True)
