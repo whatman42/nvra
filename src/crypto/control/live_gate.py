@@ -1,25 +1,31 @@
 """Live gate controller — auto enable/disable with linear self-recovery.
 
 Policy (locked):
-* Human one-time authorization remains in env:
+* Human one-time authorization remains in env (set once, persistent):
     NVRA_REAL_TRADING_ENABLE + NVRA_REAL_TRADING_CONFIRM=I_UNDERSTAND_REAL_TRADING
 * This module NEVER writes those env vars or invents the confirmation phrase.
-* When env authorization is present AND preflight/checklist passes → enable trading.
-* On soft failure → disable trading, linear backoff retry (1m, 2m, 3m, …), probe only.
-* On hard failure → stop recovery loop, require human intervention, notify.
+* When env authorization is present AND preflight/checklist passes →
+    enable adapter trading AND promote ExecutionMode.LIVE (via mode_fn).
+* On soft failure → disable trading, demote PAPER, linear backoff (1m, 2m, 3m, …).
+* On hard failure → stop recovery loop, demote PAPER, require human, notify.
 * No orders are placed from this module.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from crypto.execution.models import ExecutionMode
+
 logger = logging.getLogger(__name__)
+
+REAL_CONFIRMATION = "I_UNDERSTAND_REAL_TRADING"
 
 SOFT_REASON_PREFIXES = (
     "connect_failed",
@@ -46,6 +52,7 @@ HARD_REASON_PREFIXES = (
     "auth_failed",
     "invalid_api",
     "emergency_stop",
+    "env_authorization_missing",
 )
 
 
@@ -66,6 +73,7 @@ class FailureClass(Enum):
 class LiveGateSnapshot:
     state: str
     live_enabled: bool
+    execution_mode: str
     failure_class: str
     attempt: int
     next_retry_in_seconds: float | None
@@ -91,6 +99,14 @@ class SupportsTradingGate(Protocol):
 
 
 NotifyFn = Callable[[str, str], None]
+ModeFn = Callable[[ExecutionMode], None]
+
+
+def env_authorized() -> bool:
+    """One-time human authorization present in process environment."""
+    enable = os.getenv("NVRA_REAL_TRADING_ENABLE", "0").lower() in {"1", "true", "yes"}
+    confirm = os.getenv("NVRA_REAL_TRADING_CONFIRM", "") == REAL_CONFIRMATION
+    return bool(enable and confirm)
 
 
 def classify_reasons(reasons: list[str] | tuple[str, ...]) -> FailureClass:
@@ -115,12 +131,15 @@ def linear_backoff_seconds(attempt: int, *, base_minutes: int = 1, max_minutes: 
 
 
 class LiveGateController:
-    """Checklist-driven live enable with linear self-recovery.
+    """Checklist-driven live enable with linear self-recovery + mode promotion.
 
     preflight_fn() must return an object with:
       - live_submit_allowed: bool
       - reasons: sequence[str]
     Compatible with TokocryptoPreflightReport.
+
+    mode_fn(ExecutionMode) is optional. When provided, success promotes LIVE and
+    any disable demotes PAPER so ExecutionEngine leaves PaperBroker path.
     """
 
     def __init__(
@@ -129,9 +148,11 @@ class LiveGateController:
         *,
         preflight_fn: Callable[[], Any],
         notify: NotifyFn | None = None,
+        mode_fn: ModeFn | None = None,
         config: LiveGateConfig | None = None,
         mono_fn: Callable[[], float] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
+        env_fn: Callable[[], bool] | None = None,
     ) -> None:
         self._adapter = adapter
         self._preflight_fn = preflight_fn
@@ -140,19 +161,26 @@ class LiveGateController:
                 logging.ERROR if level in {"error", "critical"} else logging.INFO, msg
             )
         )
+        self._mode_fn = mode_fn
         self._cfg = config or LiveGateConfig()
         self._mono = mono_fn or time.monotonic
         self._sleep = sleep_fn
+        self._env_fn = env_fn or env_authorized
         self._state = LiveGateState.IDLE
         self._attempt = 0
         self._next_retry_mono: float | None = None
         self._last_reasons: tuple[str, ...] = ()
         self._last_hard_remind_mono: float | None = None
         self._message = ""
+        self._execution_mode = ExecutionMode.PAPER
 
     @property
     def state(self) -> LiveGateState:
         return self._state
+
+    @property
+    def execution_mode(self) -> ExecutionMode:
+        return self._execution_mode
 
     def snapshot(self) -> LiveGateSnapshot:
         now = self._mono()
@@ -162,6 +190,7 @@ class LiveGateController:
         return LiveGateSnapshot(
             state=self._state.name,
             live_enabled=bool(self._adapter.trading_enabled),
+            execution_mode=self._execution_mode.name,
             failure_class=(
                 FailureClass.HARD.name
                 if self._state is LiveGateState.HARD_STOP
@@ -179,6 +208,16 @@ class LiveGateController:
         if self._state is LiveGateState.HARD_STOP:
             self._maybe_hard_remind()
             return self.snapshot()
+
+        # Dual-env is mandatory before any LIVE promotion.
+        if not self._env_fn():
+            return self._on_hard(
+                (
+                    "env_authorization_missing",
+                    "NVRA_REAL_TRADING_ENABLE_not_set",
+                    "real_trading_confirmation_missing",
+                )
+            )
 
         report = self._run_preflight()
         allowed = bool(getattr(report, "live_submit_allowed", False))
@@ -205,7 +244,7 @@ class LiveGateController:
         return self.evaluate()
 
     def force_hard_stop(self, reason: str) -> LiveGateSnapshot:
-        self._disable_quiet()
+        self._demote_paper()
         self._state = LiveGateState.HARD_STOP
         self._message = reason
         self._last_reasons = (reason,)
@@ -241,18 +280,19 @@ class LiveGateController:
         except Exception as exc:  # noqa: BLE001
             return self._on_soft((f"connect_failed:{type(exc).__name__}",))
 
+        self._promote_live()
         self._state = LiveGateState.LIVE_ENABLED
         self._attempt = 0
         self._next_retry_mono = None
         self._message = "live_enabled"
         if was_recovering:
-            self._notify("info", "NVRA live recovered — trading re-enabled")
+            self._notify("info", "NVRA live recovered — trading re-enabled; mode=LIVE")
         else:
-            self._notify("info", "NVRA live enabled — checklist passed")
+            self._notify("info", "NVRA live enabled — checklist passed; mode=LIVE")
         return self.snapshot()
 
     def _on_soft(self, reasons: tuple[str, ...]) -> LiveGateSnapshot:
-        self._disable_quiet()
+        self._demote_paper()
         self._attempt = max(1, self._attempt + 1)
         delay = linear_backoff_seconds(
             self._attempt,
@@ -271,30 +311,45 @@ class LiveGateController:
         self._notify(
             "warn",
             f"NVRA live disabled (soft): {', '.join(reasons) or 'unknown'}; "
-            f"retry in {int(delay // 60)}m (attempt {self._attempt})",
+            f"retry in {int(delay // 60)}m (attempt {self._attempt}); mode=PAPER",
         )
         if self._sleep is not None:
             self._sleep(delay)
         return self.snapshot()
 
     def _on_hard(self, reasons: tuple[str, ...]) -> LiveGateSnapshot:
-        self._disable_quiet()
+        self._demote_paper()
         self._state = LiveGateState.HARD_STOP
         self._next_retry_mono = None
         self._message = "hard_stop"
+        self._last_reasons = reasons
         self._last_hard_remind_mono = self._mono()
         self._notify(
             "critical",
-            f"NVRA live HARD_STOP — human required: {', '.join(reasons) or 'unknown'}",
+            f"NVRA live HARD_STOP — human required: {', '.join(reasons) or 'unknown'}; mode=PAPER",
         )
         return self.snapshot()
 
-    def _disable_quiet(self) -> None:
+    def _promote_live(self) -> None:
+        self._execution_mode = ExecutionMode.LIVE
+        if self._mode_fn is not None:
+            try:
+                self._mode_fn(ExecutionMode.LIVE)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mode_fn LIVE failed: %s", type(exc).__name__)
+
+    def _demote_paper(self) -> None:
         try:
             if self._adapter.trading_enabled:
                 self._adapter.enable_trading(False)
         except Exception:  # noqa: BLE001
             pass
+        self._execution_mode = ExecutionMode.PAPER
+        if self._mode_fn is not None:
+            try:
+                self._mode_fn(ExecutionMode.PAPER)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mode_fn PAPER failed: %s", type(exc).__name__)
 
     def _maybe_hard_remind(self) -> None:
         mins = self._cfg.hard_stop_remind_minutes
