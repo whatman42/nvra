@@ -1,8 +1,11 @@
 # NVRA Unified Institutional Runtime Configuration
 # Secrets are NEVER stored here. Use environment variables / Windows Credential Manager.
 #
-# Tokocrypto = real capital only (no native DEMO/sandbox).
-# Live orders still require dual env + ProductionGate + preflight (never auto-fire).
+# Venue policy (locked):
+#   Tokocrypto = real capital only (dual env + gates still required)
+#   IDX        = signal only (no order execution)
+#   MT5        = follow the account logged into the terminal (DEMO or LIVE)
+#   Telegram   = all operational notifications
 schema_version: nvra-config-v1
 
 # Hardware-aware workload governor. 8GB DDR3 is the minimum supported host.
@@ -80,29 +83,42 @@ data:
   require_quality_gate: true
   dynamic_universe: true
 
+# All operational notifications route to Telegram (token/chat via env).
 telegram:
-  enabled: false
+  enabled: true
   bot_token_env: TELEGRAM_BOT_TOKEN
   chat_id_env: TELEGRAM_CHAT_ID
   report_portfolio: true
   report_signals: true
   report_risk: true
   report_health: true
+  report_orders: true
+  report_live_gate: true
+  report_errors: true
+  report_startup: true
 
-# Broker profiles. Tokocrypto is REAL capital only (no sandbox).
+# Broker profiles.
+# MT5: no DEMO/REAL selector — runtime follows terminal account type.
 brokers:
   binance: {mode: DEMO, sandbox: true, allow_real: false}
   tokocrypto: {mode: REAL, sandbox: false, allow_real: true}
   indodax: {mode: DEMO, sandbox: true, allow_real: false}
-  mt5: {mode: DEMO, sandbox: true, allow_real: false}
+  mt5:
+    mode: FOLLOW_TERMINAL
+    sandbox: false
+    allow_real: true
+    follow_terminal_account: true
 
 real_trading:
   enable_env: NVRA_REAL_TRADING_ENABLE
   confirmation_env: NVRA_REAL_TRADING_CONFIRM
   confirmation_phrase: I_UNDERSTAND_REAL_TRADING
 
+# IDX: research + signals only — never place equity orders from NVRA.
 idx:
   enabled: true
+  signal_only: true
+  execution_enabled: false
   lot_size: 100
   tick_rules_version: "configurable-2026"
   enforce_sessions: true
@@ -131,6 +147,7 @@ recovery:
 notifications:
   structured_logging: true
   minimum_severity: INFO
+  primary_channel: telegram
 
 validation:
   offline_only_heavy_quant: true
