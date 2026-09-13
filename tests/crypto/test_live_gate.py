@@ -10,6 +10,7 @@ from crypto.control.live_gate import (
     classify_reasons,
     linear_backoff_seconds,
 )
+from crypto.execution.models import ExecutionMode
 
 
 class FakeAdapter:
@@ -49,24 +50,48 @@ def test_classify_hard_vs_soft() -> None:
     assert classify_reasons([]) is FailureClass.NONE
 
 
-def test_enable_when_checklist_ok() -> None:
+def test_enable_when_checklist_ok_promotes_live() -> None:
     ad = FakeAdapter()
+    modes: list[ExecutionMode] = []
     notes: list[tuple[str, str]] = []
     ctl = LiveGateController(
         ad,
         preflight_fn=lambda: FakeReport(True),
         notify=lambda lvl, msg: notes.append((lvl, msg)),
+        mode_fn=modes.append,
         mono_fn=lambda: 1000.0,
+        env_fn=lambda: True,
     )
     snap = ctl.evaluate()
     assert snap.state == LiveGateState.LIVE_ENABLED.name
     assert ad.trading_enabled is True
+    assert snap.execution_mode == "LIVE"
+    assert ctl.execution_mode is ExecutionMode.LIVE
+    assert modes == [ExecutionMode.LIVE]
     assert any("enabled" in m.lower() for _, m in notes)
 
 
-def test_soft_fail_then_recover() -> None:
+def test_missing_env_is_hard_stop_stays_paper() -> None:
+    ad = FakeAdapter()
+    modes: list[ExecutionMode] = []
+    ctl = LiveGateController(
+        ad,
+        preflight_fn=lambda: FakeReport(True),
+        mode_fn=modes.append,
+        mono_fn=lambda: 0.0,
+        env_fn=lambda: False,
+    )
+    snap = ctl.evaluate()
+    assert snap.state == LiveGateState.HARD_STOP.name
+    assert ad.trading_enabled is False
+    assert snap.execution_mode == "PAPER"
+    assert ExecutionMode.PAPER in modes
+
+
+def test_soft_fail_then_recover_promotes_live() -> None:
     ad = FakeAdapter()
     clock = {"t": 0.0}
+    modes: list[ExecutionMode] = []
     results = iter(
         [
             FakeReport(False, ("connect_failed:NetworkError",)),
@@ -79,12 +104,15 @@ def test_soft_fail_then_recover() -> None:
         ad,
         preflight_fn=lambda: next(results),
         notify=lambda lvl, msg: notes.append(msg),
+        mode_fn=modes.append,
         mono_fn=lambda: clock["t"],
+        env_fn=lambda: True,
         config=LiveGateConfig(base_backoff_minutes=1, max_backoff_minutes=60),
     )
     s1 = ctl.evaluate()
     assert s1.state == LiveGateState.RECOVERING.name
     assert ad.trading_enabled is False
+    assert s1.execution_mode == "PAPER"
     assert s1.attempt == 1
     assert s1.next_retry_in_seconds == 60
 
@@ -102,6 +130,8 @@ def test_soft_fail_then_recover() -> None:
     s3 = ctl.tick()
     assert s3.state == LiveGateState.LIVE_ENABLED.name
     assert ad.trading_enabled is True
+    assert s3.execution_mode == "LIVE"
+    assert modes[-1] is ExecutionMode.LIVE
     assert any("recovered" in n.lower() for n in notes)
 
 
@@ -112,10 +142,12 @@ def test_hard_stop_no_auto_retry() -> None:
         preflight_fn=lambda: FakeReport(False, ("real_trading_confirmation_missing",)),
         notify=lambda *_: None,
         mono_fn=lambda: 0.0,
+        env_fn=lambda: True,
     )
     s = ctl.evaluate()
     assert s.state == LiveGateState.HARD_STOP.name
     assert ad.trading_enabled is False
+    assert s.execution_mode == "PAPER"
     s2 = ctl.tick()
     assert s2.state == LiveGateState.HARD_STOP.name
 
@@ -135,12 +167,14 @@ def test_hard_stop_reset_by_operator() -> None:
         preflight_fn=pf,
         notify=lambda *_: None,
         mono_fn=lambda: 0.0,
+        env_fn=lambda: True,
     )
     ctl.evaluate()
     assert ctl.state is LiveGateState.HARD_STOP
     snap = ctl.reset_hard_stop()
     assert snap.state == LiveGateState.LIVE_ENABLED.name
     assert ad.trading_enabled is True
+    assert snap.execution_mode == "LIVE"
 
 
 def test_enable_permission_error_is_hard() -> None:
@@ -151,6 +185,8 @@ def test_enable_permission_error_is_hard() -> None:
         preflight_fn=lambda: FakeReport(True),
         notify=lambda *_: None,
         mono_fn=lambda: 0.0,
+        env_fn=lambda: True,
     )
     s = ctl.evaluate()
     assert s.state == LiveGateState.HARD_STOP.name
+    assert s.execution_mode == "PAPER"
