@@ -1,6 +1,7 @@
 # Per-broker execution profile.
 # DEMO = exchange demo/testnet where supported, else internal paper only.
 # REAL = real account, but still requires environment authorization.
+# FOLLOW_TERMINAL = (MT5 only) mode follows the account logged into the terminal.
 # Never put API keys/passwords in this file.
 #
 # Tokocrypto has NO native sandbox/testnet.
@@ -8,6 +9,8 @@
 # but order submit remains OFF until dual env confirmation + ProductionGate +
 # risk/data/health/permission/preflight all pass. Prefer trade-only API keys
 # with withdrawal disabled.
+#
+# IDX is not a broker here — equity path is signal-only (see settings.yaml idx).
 
 brokers:
   binance:
@@ -23,9 +26,13 @@ brokers:
     sandbox: true
     allow_real: false
   mt5:
-    mode: DEMO
-    sandbox: true
-    allow_real: false
+    # No DEMO/REAL UI selector. Detect trade_mode from terminal:
+    #   0 DEMO → paper/demo constraints
+    #   2 LIVE → real capital path (still subject to dual env + gates)
+    mode: FOLLOW_TERMINAL
+    sandbox: false
+    allow_real: true
+    follow_terminal_account: true
 
 real_trading:
   enable_env: NVRA_REAL_TRADING_ENABLE
