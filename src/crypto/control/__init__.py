@@ -2,6 +2,15 @@
 
 from crypto.control.audit import AuditEntry, ControlAuditLog
 from crypto.control.auth import PinAuthConfig, PinAuthState, generate_session_token
+from crypto.control.live_gate import (
+    FailureClass,
+    LiveGateConfig,
+    LiveGateController,
+    LiveGateSnapshot,
+    LiveGateState,
+    classify_reasons,
+    linear_backoff_seconds,
+)
 from crypto.control.plane import (
     AppRuntimeState,
     CommandKind,
@@ -21,4 +30,11 @@ __all__ = [
     "ControlAuditLog",
     "AuditEntry",
     "generate_session_token",
+    "LiveGateController",
+    "LiveGateConfig",
+    "LiveGateSnapshot",
+    "LiveGateState",
+    "FailureClass",
+    "classify_reasons",
+    "linear_backoff_seconds",
 ]
