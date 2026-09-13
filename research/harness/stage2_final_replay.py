@@ -164,7 +164,9 @@ def _multi_handler(cfg: FinalConfig, analysis: dict[str, Any], *, order: str = "
         "processed": processed,
         "completed_nodes": list(ctx2.completed_nodes) if ctx2 else [],
         "evidence_index": dict(ctx2.evidence_index) if ctx2 else {},
-        "handler_names": [type(h).__name__ for h in handlers],
+        "handler_names": [
+            type(h).__name__.removesuffix("Handler").lower() for h in handlers
+        ],
     }
 
 
