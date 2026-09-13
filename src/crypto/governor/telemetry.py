@@ -9,6 +9,9 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+# psutil platform surface varies: Windows builds often lack sensors_temperatures.
+_PSUTIL_ERRORS = (ImportError, OSError, RuntimeError, AttributeError, ValueError, TypeError)
+
 
 @dataclass(frozen=True, slots=True)
 class ResourceSample:
@@ -72,7 +75,7 @@ def _cpu_util() -> float | None:
             import psutil
 
             return max(0.0, min(1.0, float(psutil.cpu_percent(interval=0.0)) / 100.0))
-        except (ImportError, OSError, RuntimeError):
+        except _PSUTIL_ERRORS:
             return None
     try:
         load1, _, _ = os.getloadavg()
@@ -90,7 +93,7 @@ def _mem() -> tuple[int | None, int | None, int | None]:
             vm = psutil.virtual_memory()
             sw = psutil.swap_memory()
             return int(vm.total), int(vm.available), int(sw.used)
-        except (ImportError, OSError, RuntimeError):
+        except _PSUTIL_ERRORS:
             return None, None, None
 
     meminfo = Path("/proc/meminfo")
@@ -120,7 +123,7 @@ def _process_rss() -> int | None:
             import psutil
 
             return int(psutil.Process().memory_info().rss)
-        except (ImportError, OSError, RuntimeError):
+        except _PSUTIL_ERRORS:
             return None
 
     status = Path("/proc/self/status")
@@ -146,7 +149,12 @@ def _cpu_temp() -> float | None:
         try:
             import psutil
 
+            # sensors_temperatures is often unavailable on Windows builds.
+            if not hasattr(psutil, "sensors_temperatures"):
+                return None
             temps = psutil.sensors_temperatures()
+            if not temps:
+                return None
             values = [
                 float(item.current)
                 for entries in temps.values()
@@ -154,7 +162,7 @@ def _cpu_temp() -> float | None:
                 if item.current is not None and 0 < float(item.current) < 120
             ]
             return values[0] if values else None
-        except (ImportError, OSError, RuntimeError, ValueError):
+        except _PSUTIL_ERRORS:
             return None
 
     hwmon = Path("/sys/class/hwmon")
@@ -177,9 +185,11 @@ def _on_battery() -> bool | None:
         try:
             import psutil
 
+            if not hasattr(psutil, "sensors_battery"):
+                return None
             b = psutil.sensors_battery()
             return None if b is None else not bool(b.power_plugged)
-        except (ImportError, OSError, RuntimeError):
+        except _PSUTIL_ERRORS:
             return None
 
     bat = Path("/sys/class/power_supply")
