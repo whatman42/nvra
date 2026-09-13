@@ -1,6 +1,8 @@
 # NVRA Unified Institutional Runtime Configuration
 # Secrets are NEVER stored here. Use environment variables / Windows Credential Manager.
-# PAPER-ONLY: this file intentionally contains no live execution switch.
+#
+# Tokocrypto = real capital only (no native DEMO/sandbox).
+# Live orders still require dual env + ProductionGate + preflight (never auto-fire).
 schema_version: nvra-config-v1
 
 # Hardware-aware workload governor. 8GB DDR3 is the minimum supported host.
@@ -18,6 +20,7 @@ hardware:
   agent_debate_rounds_max: 3
 
 runtime:
+  # Process boots safe. LiveGate + dual env promote Tokocrypto to LIVE execution.
   mode: PAPER
   timezone: Asia/Jakarta
   data_dir: "~/.nvrafx"
@@ -45,7 +48,9 @@ signals:
   recovery_cycles: 2
 
 execution:
-  paper_only: true
+  # false = LIVE path allowed when ExecutionMode.LIVE + dual env + gates pass.
+  # Tokocrypto has no paper venue; unauthorized sessions stay local PaperBroker.
+  paper_only: false
   max_adv_participation: 0.01
   base_fee_bps: 10
   volatility_spread_multiplier: 1.0
@@ -84,9 +89,7 @@ telegram:
   report_risk: true
   report_health: true
 
-# Broker execution profiles. Each broker independently supports DEMO or REAL.
-# REAL additionally requires explicit environment authorization.
-# Tokocrypto default is REAL-ready (option A); order submit still requires dual env + gates.
+# Broker profiles. Tokocrypto is REAL capital only (no sandbox).
 brokers:
   binance: {mode: DEMO, sandbox: true, allow_real: false}
   tokocrypto: {mode: REAL, sandbox: false, allow_real: true}
@@ -97,7 +100,6 @@ real_trading:
   enable_env: NVRA_REAL_TRADING_ENABLE
   confirmation_env: NVRA_REAL_TRADING_CONFIRM
   confirmation_phrase: I_UNDERSTAND_REAL_TRADING
-
 
 idx:
   enabled: true
