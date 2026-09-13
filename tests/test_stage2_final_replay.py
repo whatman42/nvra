@@ -29,7 +29,10 @@ def test_final_100_runs():
 def test_startup_composition_running():
     r = run_final(FinalConfig(seed=3))
     st = r.metadata["startup"]
-    assert st["ok"] is True
+    assert st["ok"] is True, (
+        f"startup failed state={st.get('final_state')} "
+        f"license={st.get('license_status')} errors={st.get('errors')}"
+    )
     assert st["final_state"] in ("RUNNING", "READY")
     assert st["broker_credentials"] is False
     assert st["live"] is False

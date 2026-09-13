@@ -229,23 +229,32 @@ def _risk(cfg: FinalConfig, decision: dict[str, Any]) -> dict[str, Any]:
 
 
 def _startup_composition() -> dict[str, Any]:
-    from crypto.runtime.paths import PathResolver, set_resolver
+    import os
+
+    from crypto.runtime.paths import DeployMode, PathResolver, set_resolver
     from crypto.runtime.startup import run_startup
+
+    # Harness isolation: no broker, no long retry sleeps (Windows CI friendly).
+    os.environ.setdefault("NVRA_STARTUP_FAST", "1")
+    # Ensure no accidental live/exchange config leaks into composition probe.
+    os.environ.pop("NVRA_EXCHANGE_ID", None)
+    os.environ.pop("NVRA_LICENSE_SERVICE_URL", None)
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         root = Path(td)
-        for name in ("state", "data", "logs", "config"):
-            (root / name).mkdir(parents=True, exist_ok=True)
-        resolver = PathResolver(root)
+        resolver = PathResolver(root, mode=DeployMode.DEV, data_root=root)
         set_resolver(resolver)
         result = run_startup(resolver, argv=["--paper"])
+        errors = list(getattr(result.context, "errors", []) or [])
         return {
-            "ok": result.ok,
+            "ok": bool(result.ok),
             "final_state": result.state.name,
             "exit_success": bool(result.ok and result.state.name in ("RUNNING", "READY")),
             "path": "crypto.runtime.startup.run_startup",
             "broker_credentials": False,
             "live": False,
+            "errors": errors,
+            "license_status": getattr(result.context, "license_status", ""),
         }
 
 

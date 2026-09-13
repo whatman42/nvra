@@ -82,6 +82,9 @@ Stage = Callable[[StartupContext], bool]
 
 def _retry_stage(name: str, stage: Stage, context: StartupContext, *, attempts: int = 5) -> bool:
     """Run a startup stage with bounded SAFE_MODE recovery retries."""
+    fast = os.environ.get("NVRA_STARTUP_FAST", "").lower() in {"1", "true", "yes"}
+    if fast:
+        attempts = min(attempts, 2)
     last_error = ""
     for attempt in range(1, attempts + 1):
         try:
@@ -110,7 +113,8 @@ def _retry_stage(name: str, stage: Stage, context: StartupContext, *, attempts: 
                 f"startup stage failed: {name}", mono=time.monotonic()
             )
             logger.warning("startup SAFE_MODE stage=%s retrying", name)
-            time.sleep(min(2.0, 0.25 * attempt))
+            if not fast:
+                time.sleep(min(2.0, 0.25 * attempt))
 
     context.state = StartupState.SAFE_MODE
     _publish_startup_state(context.state)
@@ -137,10 +141,16 @@ def _license_device(ctx: StartupContext) -> bool:
 
 def _load_state(ctx: StartupContext) -> bool:
     """Run the existing crash-safe SQLite migration path."""
+    from contextlib import suppress
+
     conn, result = open_and_migrate(ctx.resolver.sqlite_path(), ctx.resolver.backups_dir)
     ctx.migration = result
     if conn is not None:
-        conn.close()
+        # Checkpoint WAL before close — avoids Windows temp-dir lock issues.
+        with suppress(Exception):
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        with suppress(Exception):
+            conn.close()
     if not result.ok:
         raise RuntimeError(result.detail)
     logger.info("startup state loaded: %s", result.detail)
